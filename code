@@ -15,12 +15,47 @@ class SqueezeExcitation(nn.Module):
         return torch.sigmoid(x_se) * x
 
 
+class SpatialAttention(nn.Module):
+    def __init__(self, in_channels, reduction_ratio=16):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(in_channels, in_channels // reduction_ratio, kernel_size=1, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Conv2d(in_channels // reduction_ratio, in_channels, kernel_size=1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x_se = self.pool(x)
+        x_se = self.fc1(x_se)
+        x_se = self.relu(x_se)
+        x_se = self.fc2(x_se)
+        x_se = self.sigmoid(x_se)
+        return x_se * x
+
+
+class ChannelAttention(nn.Module):
+    def __init__(self, in_channels, reduction_ratio=16):
+        super().__init__()
+        self.fc1 = nn.Conv2d(in_channels, in_channels // reduction_ratio, kernel_size=1, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Conv2d(in_channels // reduction_ratio, in_channels, kernel_size=1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x_se = self.fc1(x)
+        x_se = self.relu(x_se)
+        x_se = self.fc2(x_se)
+        x_se = self.sigmoid(x_se)
+        return x_se * x
+
+
 class MBConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, expand_ratio, se_ratio=0.25, drop_connect_rate=0.2):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, expand_ratio, se_ratio=0.25, reduction_ratio=16, drop_connect_rate=0.2):
         super().__init__()
 
         self.expand_channels = int(in_channels * expand_ratio)
         self.use_se = (se_ratio is not None) and (0 < se_ratio <= 1)
+        self.use_sa = True
         self.id_skip = (stride == 1 and in_channels == out_channels)
 
         # Expansion phase
@@ -40,6 +75,13 @@ class MBConvBlock(nn.Module):
         # Squeeze and Excitation phase
         if self.use_se:
             self.se = SqueezeExcitation(self.expand_channels, self.expand_channels, se_ratio=se_ratio)
+
+        # Spatial Attention phase
+        if self.use_sa:
+            self.sa = SpatialAttention(self.expand_channels, reduction_ratio=reduction_ratio)
+
+        # Channel Attention phase
+        self.ca = ChannelAttention(self.expand_channels, reduction_ratio=reduction_ratio)
 
         # Output phase
         self.project_conv = nn.Conv2d(self.expand_channels, out_channels, kernel_size=1)
@@ -77,6 +119,15 @@ class MBConvBlock(nn.Module):
         if self.use_se:
             x = self.se(x)
 
+        # Spatial Attention phase
+        if self.use_sa:
+            x_sa = self.sa(x)
+            x = x * x_sa
+
+        # Channel Attention phase
+        x_ca = self.ca(x)
+        x = x * x_ca
+
         # Output phase
         x = self.project_conv(x)
         x = self.bn2(x)
@@ -91,7 +142,7 @@ class MBConvBlock(nn.Module):
 
 
 class EfficientNetV2S(nn.Module):
-    def __init__(self, num_classes=1000, width_mult=1.0):
+    def __init__(self, num_classes=1000, width_mult=1.0, reduction_ratio=16):
         super().__init__()
 
         # Settings for each block of MBConv blocks
@@ -137,7 +188,7 @@ class EfficientNetV2S(nn.Module):
         out_channels = channels[0]
         for i, (c, k, s, e, r) in enumerate(settings):
             out_channels = channels[i + 1]
-            layers.append(MBConvBlock(in_channels, out_channels, k, s, e, se_ratio=r))
+            layers.append(MBConvBlock(in_channels, out_channels, k, s, e, se_ratio=r, reduction_ratio=reduction_ratio))
             in_channels = out_channels
 
         # Construct the classifier
