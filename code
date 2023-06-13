@@ -1,0 +1,101 @@
+import torch
+import torch.nn as nn
+
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, stride=1, padding=3)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+        pool = torch.cat([avg_pool, max_pool], dim=1)
+        pool = self.conv(pool)
+        pool = self.sigmoid(pool)
+        return x * pool
+
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc2(self.relu(self.fc1(self.avg_pool(x))))
+        max_out = self.fc2(self.relu(self.fc1(self.max_pool(x))))
+        out = avg_out + max_out
+        out = self.sigmoid(out)
+        return x * out
+
+class SEBlock(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(SEBlock, self).__init__()
+        self.channel_attention = ChannelAttention(in_planes, ratio)
+        self.spatial_attention = SpatialAttention()
+
+    def forward(self, x):
+        out = self.channel_attention(x)
+        out = self.spatial_attention(out)
+        return out
+
+class EfficientNetV2S(nn.Module):
+    def __init__(self, num_classes=1000):
+        super(EfficientNetV2S, self).__init__()
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, 24, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(24),
+            nn.SiLU(),
+            nn.Conv2d(24, 24, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(24),
+            nn.SiLU(),
+            nn.Conv2d(24, 48, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(48),
+            nn.SiLU(),
+        )
+
+        self.block1 = nn.Sequential(
+            nn.Conv2d(48, 96, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 48, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(48),
+            nn.SiLU(),
+            nn.SEBlock(48),
+            nn.Conv2d(48, 96, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 48, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(48),
+            nn.SiLU(),
+            nn.SEBlock(48),
+            nn.Conv2d(48, 96, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(96),
+            nn.SiLU(),
+            nn.Conv2d(96, 48, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(48),
+            nn.SiLU(),
+            nn.SEBlock(48),
+        )
+        
+        #...添加其它层
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.block1(x)
+        #...添加其它层
+        return x
+        
